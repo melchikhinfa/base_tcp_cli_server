@@ -1,7 +1,8 @@
 import socket
-# import threading
+import threading
 from typing import Dict, Union, Any
 from logger import server_logger
+from db import UserRegistration
 import json
 
 DEF_PORT = 5001
@@ -15,6 +16,14 @@ class Server:
         self.connections_list = []
         self.user_ip_pair = {}
         server_logger.info(f"Инициализация сервера. Слушает порт:{port}")
+
+        while True:
+            conn, address = self.sock.accept()
+
+            self.connections_list.append((conn, address[0]))
+            server_logger.info(f"Подключился клиент {address[0]}")
+            thr = threading.Thread(target=self.message_logic, args=(conn, address[0]), daemon=True)
+            thr.start()
 
     def socket_init(self):
         sock = socket.socket()
@@ -67,4 +76,49 @@ class Server:
                 # Если вообще ничего не пришло - это конец всего соединения
             if not conn_info:
                 break
+
+
+
+
+    def getаааа_data(self, conn, ip_addr):
+        data = conn.recv(4096).decode()
+        server_logger.info(f"Получили данные от клиента {ip_addr}: {data}")
+        data = json.loads(data)
+        username = data["username"]
+        password = data["password"]
+        self.user_ip_pair[ip_addr] = username
+        server_logger.info(f"Зарегистрировали пользователя {username} с паролем {password} и ip адресом {ip_addr}")
+        return username, password, ip_addr
+
+    def run(self):
+        self.socket_init()
+        while True:
+            conn, address = self.sock.accept()
+            self.connections_list.append((conn, address[0]))
+            server_logger.info(f"Подключился клиент {address[0]}")
+            thr = threading.Thread(target=self.message_logic, args=(conn, address[0]), daemon=True)
+            thr.start()
+
+    def reg_logic(self, conn, addr):
+        """
+        Логика регистрации пользователя
+        """
+        data = json.loads(conn.recv(1024).decode())
+        new_pass, new_username = hash(data["password"]), data["username"]
+        new_ip = addr[0]
+        self.database.user_reg(new_ip, new_pass, new_username)
+        server_logger.info(f"Клиент {new_ip} -> регистрация прошла успешно")
+        data = {"result": True}
+        if new_ip in self.reg_list:
+            self.reg_list.remove(new_ip)
+            server_logger.info(f"Клиент {new_ip} уже зарегистрирован.")
+
+        self.send_message(conn, data, new_ip)
+        server_logger.info(f"Клиент {new_ip}. Отправили данные о результате регистрации")
+
+
+
+
+
+
 
