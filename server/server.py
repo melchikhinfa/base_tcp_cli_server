@@ -1,12 +1,15 @@
 import socket
 import threading
-from typing import Dict, Union
-from logger import server_logger
-from db import UserRegistration
 import json
 import uuid
 import datetime
+import sys
+from typing import Dict, Union
+from logger import server_logger
+from auth import UserRegistration
+from port_checker import PortValidator
 from settings import *
+
 
 
 class Server:
@@ -15,16 +18,15 @@ class Server:
         self.port = port
         self.sock = None
         self.sessions_list = []
-        self.sessions_list = []
-        self.db_processing = UserRegistration()
+        self.auth_processing = UserRegistration()
         self.socket_init()
         server_logger.info(f"Инициализация сервера. Слушает порт:{port}")
 
         while True:
             conn, address = self.sock.accept()
-            tocken, est_time = self.generate_tocken()
+            token, est_time = self.generate_token()
             server_logger.info(f"Создан временный токен для клиента {address[0]}")
-            self.sessions_list.append((conn, address[0], tocken, est_time))
+            self.sessions_list.append((conn, address[0], token, est_time))
             server_logger.info(f"Подключился клиент {address[0]}")
             thr = threading.Thread(target=self.message_logic, args=(conn, address[0]), daemon=True)
             thr.start()
@@ -36,21 +38,22 @@ class Server:
         self.sock = sock
 
     @staticmethod
-    def generate_tocken():
-        tocken = uuid.uuid4()
+    def generate_token():
+        token = uuid.uuid4()
         est_time = datetime.datetime.now() + datetime.timedelta(minutes=TOKEN_EST_TIME)
-        return tocken, est_time
+        return token, est_time
 
     def check_session(self):
         for session in self.sessions_list:
             if session[3] < datetime.datetime.now():
                 self.sessions_list.remove(session)
                 self.auth_logic(session[0], session[1])
-                self.generate_tocken()
+                self.generate_token()
             else:
                 continue
 
-    def send_message(self, conn, data: Union[str, Dict[str, object]], ip: str) -> None:
+    @staticmethod
+    def send_message(conn, data: Union[str, Dict[str, object]], ip: str) -> None:
         """Отправка данных"""
         data_text = data
         if type(data) == dict:
@@ -65,7 +68,7 @@ class Server:
             conn_data = conn.recv(4096)
             data += conn_data.decode()
             if "LF" in data:
-                username = self.db_processing.get_info(ip_addr)[1]
+                username = self.auth_processing.get_info(ip_addr)[1]
                 server_logger.info(
                     f"Получили сообщение {data} от клиента {ip_addr} ({username})"
                 )
@@ -88,11 +91,12 @@ class Server:
                 break
 
     def reg_logic(self, conn, addr):
+        conn.sendall("Для регистрации введите следующие данные:".encode())
         conn.sendall("Введите имя пользователя:".encode())
         username = conn.recv(1024).decode()
         conn.sendall("Введите пароль:".encode())
         password = conn.recv(1024).decode()
-        if self.db_processing.userreg(addr, username, password):
+        if self.auth_processing.userreg(addr, username, password):
             server_logger.info(f"Пользователь {username} зарегистрирован (ip: {addr})")
             conn.sendall("Вы успешно зарегистрированы!".encode())
         else:
@@ -101,15 +105,16 @@ class Server:
             self.auth_logic(conn, addr)
 
     def auth_logic(self, conn, addr):
+        conn.sendall("Для авторизации введите следующие данные:".encode())
         conn.sendall("Введите имя пользователя:".encode())
         username = conn.recv(1024).decode()
         conn.sendall("Введите пароль:".encode())
         password = conn.recv(1024).decode()
-        if self.db_processing.userauth(addr, username, password) == 1:
+        addr = addr[0]
+        if self.auth_processing.userauth(addr, username, password) == 1:
             server_logger.info(f"Пользователь {username} авторизован (ip: {addr})")
             conn.sendall("Вы успешно авторизованы!".encode())
-            self.db_processing.change_status(addr, 'authorized')
-        elif self.db_processing.userauth(addr, username, password) == 0:
+        elif self.auth_processing.userauth(addr, username, password) == 0:
             server_logger.info(f"Пользователь {username} ввел неверный пароль (ip: {addr})")
             conn.sendall("Неверный пароль".encode())
         else:
@@ -119,6 +124,7 @@ class Server:
 
     def handle_logic(self, conn, addr):
         while True:
+            addr = addr[0]
             conn.sendall("Выберите действие: reg - регистрация,\
                           auth - авторизация,\
                           exit - выход".encode()
@@ -135,24 +141,21 @@ class Server:
 
     def client_handle(self, conn, addr):
         ip = addr[0]
-        if self.db_processing.get_info(ip):
+        if self.auth_processing.get_info(ip)[3] != 'logged in':
             self.auth_logic(conn, ip)
+        elif not self.auth_processing.get_info(ip):
+            self.reg_logic(conn, ip)
         else:
+            self.message_logic(conn, ip)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def main():
+    port_input = input("Введите номер порта для сервера -> ")
+    # Тут проверка на то, занят ли порт:
+    validator = PortValidator()
+    port_flag = validator.port_validation(int(port_input))
+    if port_flag:
+        server = Server(port_input)
+    else:
+        print("Порт уже занят")
+        sys.exit(1)
