@@ -3,13 +3,11 @@ import threading
 import json
 import uuid
 import datetime
-import sys
 from typing import Dict, Union
-from logger import server_logger
+from serv_logger import server_logger
 from auth import UserRegistration
 from port_checker import PortValidator
 from settings import *
-
 
 
 class Server:
@@ -53,7 +51,7 @@ class Server:
                 continue
 
     @staticmethod
-    def send_message(conn, data: Union[str, Dict[str, object]], ip: str) -> None:
+    def send_message(conn, data: dict, ip: str) -> None:
         """Отправка данных"""
         data_text = data
         if type(data) == dict:
@@ -91,35 +89,32 @@ class Server:
                 break
 
     def reg_logic(self, conn, addr):
-        conn.sendall("Для регистрации введите следующие данные:".encode())
-        conn.sendall("Введите имя пользователя:".encode())
-        username = conn.recv(1024).decode()
-        conn.sendall("Введите пароль:".encode())
-        password = conn.recv(1024).decode()
+        data = json.loads(conn.recv(1024).decode())
+        username = data["username"]
+        password = data["password"]
+        addr = addr[0]
         if self.auth_processing.userreg(addr, username, password):
             server_logger.info(f"Пользователь {username} зарегистрирован (ip: {addr})")
-            conn.sendall("Вы успешно зарегистрированы!".encode())
+            conn.sendall("success".encode())
         else:
             server_logger.info(f"Пользователь c ip: {addr} уже зарегистрирован")
-            conn.sendall("Вы уже зарегистрированы.".encode())
+            conn.sendall("failure".encode())
             self.auth_logic(conn, addr)
 
     def auth_logic(self, conn, addr):
-        conn.sendall("Для авторизации введите следующие данные:".encode())
-        conn.sendall("Введите имя пользователя:".encode())
-        username = conn.recv(1024).decode()
-        conn.sendall("Введите пароль:".encode())
-        password = conn.recv(1024).decode()
+        data = json.loads(conn.recv(1024).decode())
+        username = data["username"]
+        password = data["password"]
         addr = addr[0]
         if self.auth_processing.userauth(addr, username, password) == 1:
             server_logger.info(f"Пользователь {username} авторизован (ip: {addr})")
-            conn.sendall("Вы успешно авторизованы!".encode())
+            conn.sendall("success".encode())
         elif self.auth_processing.userauth(addr, username, password) == 0:
             server_logger.info(f"Пользователь {username} ввел неверный пароль (ip: {addr})")
-            conn.sendall("Неверный пароль".encode())
+            conn.sendall("wrong pass".encode())
         else:
             server_logger.info(f"Пользователь {username} не зарегистрирован (ip: {addr})")
-            conn.sendall("Вы не зарегистрированы. Пройдите регистрацию далее.".encode())
+            conn.sendall("not registered".encode())
             self.reg_logic(conn, addr)
 
     def handle_logic(self, conn, addr):
@@ -146,16 +141,26 @@ class Server:
         elif not self.auth_processing.get_info(ip):
             self.reg_logic(conn, ip)
         else:
-            self.message_logic(conn, ip)
+            conn.close()
 
 
 def main():
-    port_input = input("Введите номер порта для сервера -> ")
+    port_input = input("Введите номер порта для подключения -> ")
+    server_logger.info(f"Проверка порта {port_input}, выбранного пользователем для подключения.")
     # Тут проверка на то, занят ли порт:
-    validator = PortValidator()
-    port_flag = validator.port_validation(int(port_input))
-    if port_flag:
-        server = Server(port_input)
+    try:
+        validator = PortValidator()
+        free_port = validator.port_validation(int(port_input))
+        server = Server(free_port)
+
+    except ValueError:
+        server_logger.error(f"Порт {port_input} не валиден.")
+        print("Порт не валиден.")
     else:
-        print("Порт уже занят")
-        sys.exit(1)
+        free_port = validator.port_validation(DEFAULT_PORT)
+        server_logger.info(f"Выставлен дефолтный порт {free_port}.")
+        server = Server(free_port)
+
+
+if __name__ == "__main__":
+    main()
